@@ -3,6 +3,7 @@ import { AircraftMroStage } from '@/components/mro/AircraftMroStage'
 import { PartAssemblyTree } from '@/components/PartAssemblyTree'
 import { PartInspectorPanel } from '@/components/PartInspectorPanel'
 import { TopMroHud } from '@/components/TopMroHud'
+import { WorkOrderDocModal, type WorkOrderDocument } from '@/components/WorkOrderDocModal'
 import {
   FLEET_AIRCRAFT,
   type AircraftComponentData,
@@ -60,6 +61,7 @@ export function App() {
   const [submittingPackage, setSubmittingPackage] = useState<boolean>(false)
   const [orderMessageByPart, setOrderMessageByPart] = useState<Record<string, string>>({})
   const [packageOrderMsg, setPackageOrderMsg] = useState<string | null>(null)
+  const [activeWorkOrderDoc, setActiveWorkOrderDoc] = useState<WorkOrderDocument | null>(null)
 
   const fleetInfo =
     FLEET_AIRCRAFT.find((f) => f.reg === aircraftReg) || FLEET_AIRCRAFT[0]
@@ -182,44 +184,68 @@ export function App() {
     }))
   }
 
+  const issueWorkOrderDocument = (
+    orderId: string,
+    items: SimulatedComponentView[]
+  ) => {
+    const now = new Date()
+    const issuedAt = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} KST`
+    setActiveWorkOrderDoc({
+      orderId,
+      issuedAt,
+      aircraftReg,
+      routeContext: fleetInfo.routeContext,
+      hangarHours,
+      cyclesAdded,
+      items,
+      aiSummary:
+        insightData?.insight ||
+        items.map((i) => `${i.nameKo}(${i.simWearPct.toFixed(1)}%)`).join(', ') +
+          ' 부품을 이번 격납고 슬롯 내 우선 교체 대상으로 편성했습니다.',
+    })
+  }
+
   const handleReplaceSingle = async () => {
     if (!selectedComponent || replacing) return
     setReplacing(true)
+    const snapshotItem = selectedComponent
     try {
       const resp = await fetch('/api/mro/replace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           aircraftReg,
-          partIds: [selectedComponent.partId],
+          partIds: [snapshotItem.partId],
           cyclesAdded,
         }),
       })
-      if (resp.ok) {
-        const result = (await resp.json()) as MroReplaceResponse
-        setReplacedByReg((prev) => ({
-          ...prev,
-          [aircraftReg]: { ...(prev[aircraftReg] || {}), [selectedComponent.partId]: true },
-        }))
-        setPackagedByReg((prev) => ({
-          ...prev,
-          [aircraftReg]: (prev[aircraftReg] || []).filter((id) => id !== selectedComponent.partId),
-        }))
-        setOrderMessageByPart((prev) => ({
-          ...prev,
-          [`${aircraftReg}:${selectedComponent.partId}`]: result.loggedToBigQuery
-            ? `작업지시 ${result.orderId}가 BigQuery에 기록되었습니다.`
-            : `작업지시 ${result.orderId} 시뮬레이션이 완료되었습니다.`,
-        }))
-      }
+      const orderId = resp.ok
+        ? ((await resp.json()) as MroReplaceResponse).orderId
+        : `WO-${Date.now().toString(36).slice(-6).toUpperCase()}`
+
+      issueWorkOrderDocument(orderId, [snapshotItem])
+      setReplacedByReg((prev) => ({
+        ...prev,
+        [aircraftReg]: { ...(prev[aircraftReg] || {}), [snapshotItem.partId]: true },
+      }))
+      setPackagedByReg((prev) => ({
+        ...prev,
+        [aircraftReg]: (prev[aircraftReg] || []).filter((id) => id !== snapshotItem.partId),
+      }))
+      setOrderMessageByPart((prev) => ({
+        ...prev,
+        [`${aircraftReg}:${snapshotItem.partId}`]: `작업지시서 ${orderId} 문서가 발행되었습니다.`,
+      }))
     } finally {
       setReplacing(false)
     }
   }
 
   const handleExecutePackage = async () => {
-    const activeIds = packagedIds.filter((id) => !replacedForCurrent[id])
-    if (activeIds.length === 0 || submittingPackage) return
+    const activeItems = simulatedComponents.filter(
+      (c) => packagedIds.includes(c.partId) && !c.replaced
+    )
+    if (activeItems.length === 0 || submittingPackage) return
     setSubmittingPackage(true)
     try {
       const resp = await fetch('/api/mro/replace', {
@@ -227,24 +253,22 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           aircraftReg,
-          partIds: activeIds,
+          partIds: activeItems.map((i) => i.partId),
           cyclesAdded,
         }),
       })
-      if (resp.ok) {
-        const result = (await resp.json()) as MroReplaceResponse
-        setReplacedByReg((prev) => {
-          const nextForReg = { ...(prev[aircraftReg] || {}) }
-          for (const id of activeIds) nextForReg[id] = true
-          return { ...prev, [aircraftReg]: nextForReg }
-        })
-        setPackagedByReg((prev) => ({ ...prev, [aircraftReg]: [] }))
-        setPackageOrderMsg(
-          result.loggedToBigQuery
-            ? `묶음 작업지시 ${result.orderId} (${activeIds.length}건)가 BigQuery에 기록되었습니다.`
-            : `묶음 작업지시 ${result.orderId} (${activeIds.length}건) 시뮬레이션 완료.`
-        )
-      }
+      const orderId = resp.ok
+        ? ((await resp.json()) as MroReplaceResponse).orderId
+        : `WO-${Date.now().toString(36).slice(-6).toUpperCase()}`
+
+      issueWorkOrderDocument(orderId, activeItems)
+      setReplacedByReg((prev) => {
+        const nextForReg = { ...(prev[aircraftReg] || {}) }
+        for (const item of activeItems) nextForReg[item.partId] = true
+        return { ...prev, [aircraftReg]: nextForReg }
+      })
+      setPackagedByReg((prev) => ({ ...prev, [aircraftReg]: [] }))
+      setPackageOrderMsg(`작업지시서 ${orderId} (${activeItems.length}건)가 발행되었습니다.`)
     } finally {
       setSubmittingPackage(false)
     }
@@ -265,7 +289,8 @@ export function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#F5F5F7] text-[#1D1D1F]">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#F5F5F7] text-[#1D1D1F] print:h-auto print:w-auto print:overflow-visible print:bg-white">
+      <div className="flex min-h-0 flex-1 flex-col print:hidden">
       <TopMroHud
         aircraftReg={aircraftReg}
         hangarHours={hangarHours}
@@ -322,6 +347,11 @@ export function App() {
           />
         )}
       </main>
+      </div>
+      <WorkOrderDocModal
+        doc={activeWorkOrderDoc}
+        onClose={() => setActiveWorkOrderDoc(null)}
+      />
     </div>
   )
 }

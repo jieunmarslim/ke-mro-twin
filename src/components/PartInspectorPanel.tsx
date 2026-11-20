@@ -230,7 +230,7 @@ export function PartInspectorPanel({
             className="rounded-xl"
           >
             <Wrench className="size-4" />
-            <span>{component.replaced ? '교체 완료' : replacing ? '기록 중...' : '단독 교체'}</span>
+            <span>{component.replaced ? '교체 완료' : replacing ? '생성 중...' : '단독 지시서'}</span>
           </Button>
         </div>
 

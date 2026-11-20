@@ -85,3 +85,14 @@
 .no-shift-stack > * {
   grid-area: 1 / 1;
 }
+
+@media print {
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+    background-color: #ffffff !important;
+  }
+}

@@ -182,8 +182,8 @@ export function PartAssemblyTree({
           className="w-full rounded-xl"
         >
           {submittingPackage
-            ? 'BigQuery 작업지시 기록 중...'
-            : `정비 묶음 작업지시 발행 (${packagedItems.length}건)`}
+            ? '작업지시서 생성 중...'
+            : `작업지시서 문서 발행 (${packagedItems.length}건)`}
         </Button>
 
         {packageOrderMsg && (
